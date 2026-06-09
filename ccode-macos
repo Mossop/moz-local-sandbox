@@ -69,28 +69,68 @@ fi
 # your checkouts live elsewhere. Set MOZSB_CWD_ONLY=1 to expose only the
 # current working directory instead of the whole tree — tighter blast radius
 # at the cost of cross-repo work.
-SRC="${MOZSB_SRC:-${CCODE_SRC:-$HOME/src}}"
-SRC="$(realpath "$SRC")"
 CWD="$(pwd -P)"
-if [[ "${MOZSB_CWD_ONLY:-${CCODE_CWD_ONLY:-0}}" == "1" ]]; then
-    RW_ROOT="$CWD"
-else
-    RW_ROOT="$SRC"
+_config="${XDG_CONFIG_HOME:-$HOME/.config}/mozsb"
+[[ -f "$_config" ]] || _config="${XDG_CONFIG_HOME:-$HOME/.config}/ccode"
+_cfg_global=(); _cfg_match=(); _global_only=""; _match_only=""
+_expand_src() { case "$1" in "~") printf '%s' "$HOME";; "~/"*) printf '%s/%s' "$HOME" "${1#~/}";; *) printf '%s' "$1";; esac; }
+_best=""; _best_len=0
+if [[ -f "$_config" ]]; then
+    while IFS= read -r _line || [[ -n "$_line" ]]; do
+        _line="${_line%%#*}"; _line="${_line#"${_line%%[![:space:]]*}"}"; _line="${_line%"${_line##*[![:space:]]}"}"
+        [[ "$_line" == \[*\] ]] || continue
+        _section="${_line#\[}"; _section="${_section%\]}"; _section="$(_expand_src "$_section")"; _section="${_section%/}"
+        if [[ "$CWD" == "$_section" || "$CWD" == "$_section"/* ]] && (( ${#_section} > _best_len )); then _best="$_section"; _best_len=${#_section}; fi
+    done < "$_config"
+    _section=""
+    while IFS= read -r _line || [[ -n "$_line" ]]; do
+        _line="${_line%%#*}"; _line="${_line#"${_line%%[![:space:]]*}"}"; _line="${_line%"${_line##*[![:space:]]}"}"
+        [[ -z "$_line" ]] && continue
+        if [[ "$_line" == \[*\] ]]; then _section="${_line#\[}"; _section="${_section%\]}"; _section="$(_expand_src "$_section")"; _section="${_section%/}"; continue; fi
+        [[ "$_line" == *=* ]] || continue
+        _key="${_line%%=*}"; _key="${_key%"${_key##*[![:space:]]}"}"; _value="${_line#*=}"; _value="${_value#"${_value%%[![:space:]]*}"}"; _value="${_value%\"}"; _value="${_value#\"}"
+        if [[ "$_key" == SRC ]]; then _value="$(_expand_src "$_value")"; if [[ -z "$_section" ]]; then _cfg_global+=("$_value"); elif [[ "$_section" == "$_best" ]]; then _cfg_match+=("$_value"); fi
+        elif [[ "$_key" == CWD_ONLY ]]; then if [[ -z "$_section" ]]; then _global_only="$_value"; elif [[ "$_section" == "$_best" ]]; then _match_only="$_value"; fi; fi
+    done < "$_config"
 fi
+_src="${MOZSB_SRC:-${CCODE_SRC:-}}"; _only="${MOZSB_CWD_ONLY:-${CCODE_CWD_ONLY:-}}"; RW_ROOTS=()
+if [[ -n "$_src" ]]; then IFS=: read -r -a RW_ROOTS <<< "$_src"
+elif (( ${#_cfg_match[@]} )); then RW_ROOTS=("${_cfg_match[@]}")
+elif (( ${#_cfg_global[@]} )); then RW_ROOTS=("${_cfg_global[@]}")
+else RW_ROOTS=("$HOME/src"); fi
+if [[ -z "$_only" ]]; then
+    if [[ -n "$_src" ]]; then _only=0
+    elif [[ -n "$_match_only" ]]; then _only="$_match_only"
+    else _only="${_global_only:-0}"; fi
+fi
+[[ "$_only" != 1 ]] || RW_ROOTS=("$CWD")
+_rw_roots=(); _seen=()
+for _root in "${RW_ROOTS[@]}"; do
+    if [[ ! -e "$_root" ]]; then echo "mozsb: warning: rw path does not exist, skipping: $_root" >&2; continue; fi
+    _root="$(python3 -I -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$_root")"
+    [[ "$_root" == / || "$(realpath "$HOME")" == "$_root" || "$(realpath "$HOME")" == "$_root"/* ]] && { echo "mozsb: refusing to expose HOME or an ancestor" >&2; exit 1; }
+    _dup=false; for _old in "${_seen[@]}"; do [[ "$_old" == "$_root" ]] && _dup=true; done
+    [[ "$_dup" == true ]] && continue
+    _seen+=("$_root"); _rw_roots+=("$_root")
+done
+(( ${#_rw_roots[@]} )) || { echo "mozsb: no source roots selected" >&2; exit 1; }
+RW_ROOT="${_rw_roots[0]}"; _cwd_allowed=false
+for _root in "${_rw_roots[@]}"; do [[ "$CWD" == "$_root" || "$CWD" == "$_root"/* ]] && _cwd_allowed=true; done
+[[ "$_cwd_allowed" == true ]] || { echo "mozsb: cwd is outside configured source roots" >&2; exit 1; }
 
 _home_real="$(realpath "$HOME")"
 if [[ "$RW_ROOT" == / || "$_home_real" == "$RW_ROOT" || "$_home_real" == "$RW_ROOT"/* ]]; then
     echo "mozsb: refusing to expose HOME or one of its ancestors" >&2
     exit 1
 fi
-if [[ "$CWD" != "$RW_ROOT" && "$CWD" != "$RW_ROOT"/* ]]; then
-    echo "mozsb: cwd is outside MOZSB_SRC; choose MOZSB_SRC or MOZSB_CWD_ONLY explicitly" >&2
-    exit 1
-fi
-if [[ "$REPO_DIR" == "$RW_ROOT" || "$REPO_DIR" == "$RW_ROOT"/* ]]; then
-    echo "mozsb: launcher is inside the writable source tree; run install.sh and use the installed mozsb" >&2
-    exit 1
-fi
+_cwd_allowed=false
+for _root in "${_rw_roots[@]}"; do
+    [[ "$CWD" == "$_root" || "$CWD" == "$_root"/* ]] && _cwd_allowed=true
+    if [[ "$REPO_DIR" == "$_root" || "$REPO_DIR" == "$_root"/* ]]; then
+        echo "mozsb: launcher is inside the writable source tree; run install.sh and use the installed mozsb" >&2; exit 1
+    fi
+done
+[[ "$_cwd_allowed" == true ]] || { echo "mozsb: cwd is outside configured source roots" >&2; exit 1; }
 
 # Sandbox-private homes for language toolchains. macOS has no bind-mount
 # equivalent, so we redirect each toolchain via its own env var
@@ -122,16 +162,18 @@ mkdir -p "$HOME/.profiler-cli"
 # command (bin/open, earlier on PATH than /usr/bin/open) sends requests
 # here via loopback.
 RUNTIME_DIR="$(mktemp -d "$_home_real/.mozsb-run.XXXXXXXX")"
-NOEXEC_SNAPSHOT=""
 cleanup() {
     if [[ -n "${OPEN_SERVER_PID:-}" ]]; then
         kill "$OPEN_SERVER_PID" 2>/dev/null || true
         wait "$OPEN_SERVER_PID" 2>/dev/null || true
     fi
-    if [[ -n "$NOEXEC_SNAPSHOT" && -f "$NOEXEC_SNAPSHOT" ]]; then
-        python3 -I "$REPO_DIR/bin/ccode-noexec" restore "$RW_ROOT" "$NOEXEC_SNAPSHOT"
+    if [[ "${MOZSB_NOEXEC:-${CCODE_NOEXEC:-0}}" == "1" ]]; then
+        for ((_i=0; _i<${#_rw_roots[@]}; _i++)); do
+            _snapshot="$RUNTIME_DIR/noexec-$_i.json"
+            [[ -f "$_snapshot" ]] && python3 -I "$REPO_DIR/bin/ccode-noexec" restore "${_rw_roots[$_i]}" "$_snapshot"
+        done
     fi
-    rm -f "$RUNTIME_DIR/open-server-status" "$RUNTIME_DIR/open-server.log" "$RUNTIME_DIR/noexec.json"
+    rm -f "$RUNTIME_DIR/open-server-status" "$RUNTIME_DIR/open-server.log" "$RUNTIME_DIR"/noexec-*.json
     rmdir "$RUNTIME_DIR"
 }
 trap cleanup EXIT
@@ -330,7 +372,7 @@ PROFILE=$(cat <<SBPROFILE
 ;; Unix sockets must belong to the sandbox's writable trees. In particular,
 ;; allowing all Unix sockets would bypass MOZSB_NO_SSH_AGENT.
 (allow network-outbound network-bind network-inbound
-  (subpath $(sb_quote "$RW_ROOT"))
+$(for _root in "${_rw_roots[@]}"; do printf '  (subpath %s)\n' "$(sb_quote "$_root")"; done)
   (subpath $(sb_quote "$SBX")))
 ;; DNS: the libc resolver talks to mDNSResponder over this socket. Denied,
 ;; name resolution hangs until timeout (e.g. claude never reaches its API).
@@ -421,7 +463,7 @@ PROFILE=$(cat <<SBPROFILE
 (allow file-read* file-write*
   (literal $(sb_quote "$HOME/.moz-phab-config"))
   (subpath $(sb_quote "$HOME/.profiler-cli"))
-  (subpath $(sb_quote "$RW_ROOT"))
+$(for _root in "${_rw_roots[@]}"; do printf '  (subpath %s)\n' "$(sb_quote "$_root")"; done)
   (subpath $(sb_quote "$HOME/.mozbuild"))
   (subpath $(sb_quote "$SBX")))
 
@@ -602,7 +644,7 @@ if [[ -n "${MOZBUILD_STATE_PATH:-}" ]]; then
     canonical_path() { python3 -I -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
     _mbpath="$(canonical_path "$MOZBUILD_STATE_PATH")"
     _mapped=false
-    for _prefix in "$HOME/.mozbuild" "$RW_ROOT"; do
+    for _prefix in "$HOME/.mozbuild" "${_rw_roots[@]}"; do
         _prefix="$(canonical_path "$_prefix")"
         if [[ "$_mbpath" == "$_prefix" || "$_mbpath" == "$_prefix"/* ]]; then
             _mapped=true
@@ -611,7 +653,7 @@ if [[ -n "${MOZBUILD_STATE_PATH:-}" ]]; then
     done
     if [[ "$_mapped" == false ]]; then
         echo "error: destination of MOZBUILD_STATE_PATH=$MOZBUILD_STATE_PATH is outside the sandbox." >&2
-        echo "It must be under one of: ~/.mozbuild, $RW_ROOT, or $CWD" >&2
+        echo "It must be under one of: ~/.mozbuild, ${_rw_roots[*]}, or $CWD" >&2
         exit 1
     fi
     ENV_ARGS+=(MOZBUILD_STATE_PATH="$MOZBUILD_STATE_PATH")
@@ -668,8 +710,10 @@ fi
 # Snapshot execute permissions in host-only storage. chmod changes ctime,
 # not mtime; a timestamp marker cannot detect files that gain execute bits.
 if [[ "${MOZSB_NOEXEC:-${CCODE_NOEXEC:-0}}" == "1" ]]; then
-    NOEXEC_SNAPSHOT="$RUNTIME_DIR/noexec.json"
-    python3 -I "$REPO_DIR/bin/ccode-noexec" snapshot "$RW_ROOT" "$NOEXEC_SNAPSHOT"
+    for _i in "${!_rw_roots[@]}"; do
+        _snapshot="$RUNTIME_DIR/noexec-$_i.json"
+        python3 -I "$REPO_DIR/bin/ccode-noexec" snapshot "${_rw_roots[$_i]}" "$_snapshot"
+    done
 fi
 
 # Run without `exec` so the EXIT trap fires after the
