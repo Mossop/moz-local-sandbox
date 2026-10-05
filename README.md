@@ -31,6 +31,8 @@ system is read-only. Claude state is not exposed to Codex, Codex state is not
 exposed to Claude, and neither is exposed to `exec`. Network is shared (needed
 for various things under and in `mach`). Claude MCP config is passed through
 automatically if present; Codex reads its normal `$CODEX_HOME/config.toml`.
+On both platforms, Codex runs with `--no-daemon` to keep its app server inside
+the outer sandbox. This requires a Codex version that supports `--no-daemon`.
 
 `./install.sh` copies the launchers and helpers into `~/.local/lib/mozsb.*`
 and symlinks the OS-appropriate installed copy as `mozsb`. Re-run it after

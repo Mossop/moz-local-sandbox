@@ -104,7 +104,10 @@ mkdir -p "$HOME/.local/share/rr"
 # wrapper at /opt/ccode-bin/xdg-open talks to it via loopback (--share-net).
 RUNTIME_DIR="$(mktemp -d "$_home_real/.mozsb-run.XXXXXXXX")"
 cleanup() {
-    [[ -z "${_OPEN_PID:-}" ]] || kill "$_OPEN_PID" 2>/dev/null || true
+    if [[ -n "${_OPEN_PID:-}" ]]; then
+        kill "$_OPEN_PID" 2>/dev/null || true
+        wait "$_OPEN_PID" 2>/dev/null || true
+    fi
     rm -f "$RUNTIME_DIR/open-server-status" "$RUNTIME_DIR/open-server.log"
     rmdir "$RUNTIME_DIR"
 }
@@ -469,8 +472,17 @@ case "$MODE" in
         bwrap "${args[@]}" "$_agent_real" "${CLAUDE_ARGS[@]}" "$@" <&0 &
         ;;
     codex)
+        # CODEX_HOME exposes the shared host daemon's control socket. Keep
+        # the app server inside bubblewrap rather than executing on the host.
+        CODEX_ARGS=(--dangerously-bypass-approvals-and-sandbox)
+        _no_daemon=0
+        for _arg in "$@"; do
+            [[ "$_arg" != "--" ]] || break
+            if [[ "$_arg" == "--no-daemon" ]]; then _no_daemon=1; break; fi
+        done
+        [[ "$_no_daemon" == "1" ]] || CODEX_ARGS+=(--no-daemon)
         bwrap "${args[@]}" "$_agent_real" \
-            --dangerously-bypass-approvals-and-sandbox "$@" <&0 &
+            "${CODEX_ARGS[@]}" "$@" <&0 &
         ;;
 esac
 BWRAP_PID=$!

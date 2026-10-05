@@ -57,6 +57,29 @@ else
     fail "Codex bwrap mounts expose Codex state only"
 fi
 
+check_codex_args() {
+    local desc="$1" expected="$2"; shift 2
+    local output received lines
+    if ! output=$(MOZSB_CODEX_BIN="$TMP/bin/codex" run_launcher codex "$@"); then
+        fail "$desc (launcher failed)"
+        return
+    fi
+    lines=$(printf '%s\n' "$expected" | wc -l)
+    received=$(printf '%s\n' "$output" | tail -n "$lines")
+    if [[ "$received" == "$expected" ]]; then ok "$desc"; else fail "$desc"; fi
+    if grep -q 'Terminated:' <<<"$output"; then fail "$desc (open-server cleanup)"; fi
+}
+
+forced=$'ARG=--dangerously-bypass-approvals-and-sandbox\nARG=--no-daemon'
+check_codex_args "Codex startup avoids host daemon" "$forced"
+check_codex_args "Codex resume avoids host daemon" "$forced"$'\nARG=resume\nARG=--last' resume --last
+check_codex_args "Codex fork avoids host daemon" "$forced"$'\nARG=fork\nARG=session-id' fork session-id
+check_codex_args "Codex exec preserves prompt" "$forced"$'\nARG=exec\nARG=prompt with spaces' exec "prompt with spaces"
+check_codex_args "explicit no-daemon is not duplicated" "$forced" --no-daemon
+check_codex_args "resume no-daemon is not duplicated" \
+    $'ARG=--dangerously-bypass-approvals-and-sandbox\nARG=resume\nARG=--no-daemon\nARG=--last' resume --no-daemon --last
+check_codex_args "no-daemon after separator remains a prompt" "$forced"$'\nARG=--\nARG=--no-daemon' -- --no-daemon
+
 claude_output=$(MOZSB_CLAUDE_BIN="$TMP/bin/claude" run_launcher claude marker)
 if grep -q '^ARG=--permission-mode$' <<<"$claude_output" && \
    grep -q '^ARG=bypassPermissions$' <<<"$claude_output" && grep -q '^ARG=marker$' <<<"$claude_output"; then

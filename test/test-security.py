@@ -134,9 +134,71 @@ class SecurityTests(unittest.TestCase):
     def test_linux_launcher(self):
         self.assert_ok(self.run_command(["/bin/bash", REPO / "test/test-linux-launcher.sh"]))
 
+    @unittest.skipUnless(sys.platform == "linux", "requires Linux and bubblewrap")
+    def test_linux_codex_stays_in_sandbox(self):
+        for directory in [".local/bin", ".cargo/bin", ".rustup", ".mozbuild"]:
+            (self.home / directory).mkdir(parents=True, exist_ok=True)
+        for config in [".arcrc", ".moz-phab-config"]:
+            self.write(self.home / config, "{}\n")
+        path = self.home / ".codex/app-server-control/app-server-control.sock"
+        path.parent.mkdir(parents=True)
+        server = socket.socket(socket.AF_UNIX)
+        self.addCleanup(server.close)
+        server.bind(str(path))
+        server.listen(5)
+        server.settimeout(0.1)
+        # A synthetic Codex tries the host daemon unless explicitly disabled.
+        # With no-daemon, its child server must inherit the PID namespace.
+        self.write(self.hostbin / "codex", """#!/usr/bin/python3
+import os, socket, subprocess, sys
+if '--no-daemon' not in sys.argv:
+    s = socket.socket(socket.AF_UNIX)
+    s.connect(os.path.join(os.environ['CODEX_HOME'], 'app-server-control/app-server-control.sock'))
+    sys.exit(77)
+subprocess.run(['/usr/bin/readlink', '/proc/self/ns/pid'], check=True)
+""", 0o755)
+        host_namespace = os.readlink("/proc/self/ns/pid")
+        for args in [[], ["resume", "--last"], ["fork", "session-id"], ["exec", "prompt"]]:
+            with self.subTest(args=args):
+                result = self.run_command([REPO / "ccode", "codex", *args])
+                self.assert_ok(result)
+                self.assertRegex(result.stdout.strip(), r"^pid:\[\d+\]$")
+                self.assertNotEqual(result.stdout.strip(), host_namespace)
+                with self.assertRaises(socket.timeout):
+                    server.accept()
+
     @unittest.skipUnless(MAC, "requires Seatbelt")
     def test_existing_macos_probes(self):
         self.assert_ok(self.run_command(["/bin/bash", REPO / "test/test-macos.sh"]))
+
+    @unittest.skipUnless(MAC, "requires Seatbelt")
+    def test_codex_runs_without_host_daemon(self):
+        # Simulate the new CLI default: connecting to the host daemon fails
+        # unless the launcher selects an in-process server. Repeated flags
+        # are rejected by Codex's argument parser as well.
+        self.write(self.hostbin / "codex", """#!/bin/bash
+count=0
+for arg in "$@"; do
+    [[ "$arg" != "--" ]] || break
+    if [[ "$arg" == "--no-daemon" ]]; then count=$((count+1)); fi
+done
+if [[ "$count" != 1 ]]; then
+    echo 'Error: app server did not become ready' >&2
+    exit 2
+fi
+printf 'ARG=%s\\n' "$@"
+""", 0o755)
+        for args in [[], ["resume", "--last"], ["fork", "session-id"],
+                     ["exec", "prompt with spaces"], ["--no-daemon"],
+                     ["resume", "--no-daemon", "--last"], ["--", "--no-daemon"]]:
+            with self.subTest(args=args):
+                result = self.run_command([REPO / "ccode-macos", "codex", *args])
+                self.assert_ok(result)
+                received = result.stdout.splitlines()
+                self.assertEqual(received[0], "ARG=--dangerously-bypass-approvals-and-sandbox")
+                self.assertEqual(received[-len(args):] if args else [],
+                                 ["ARG=" + arg for arg in args])
+                self.assertNotIn("Terminated:", result.stderr)
 
     @unittest.skipUnless(MAC, "requires Seatbelt")
     def test_existing_private_files_are_denied(self):

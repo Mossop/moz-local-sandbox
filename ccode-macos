@@ -124,7 +124,10 @@ mkdir -p "$HOME/.profiler-cli"
 RUNTIME_DIR="$(mktemp -d "$_home_real/.mozsb-run.XXXXXXXX")"
 NOEXEC_SNAPSHOT=""
 cleanup() {
-    [[ -z "${OPEN_SERVER_PID:-}" ]] || kill "$OPEN_SERVER_PID" 2>/dev/null || true
+    if [[ -n "${OPEN_SERVER_PID:-}" ]]; then
+        kill "$OPEN_SERVER_PID" 2>/dev/null || true
+        wait "$OPEN_SERVER_PID" 2>/dev/null || true
+    fi
     if [[ -n "$NOEXEC_SNAPSHOT" && -f "$NOEXEC_SNAPSHOT" ]]; then
         python3 -I "$REPO_DIR/bin/ccode-noexec" restore "$RW_ROOT" "$NOEXEC_SNAPSHOT"
     fi
@@ -640,7 +643,16 @@ case "$MODE" in
             "$_agent_real" "${CLAUDE_ARGS[@]}" "$@"
         ;;
     codex)
+        # The shared host daemon is outside Seatbelt and its control socket
+        # is intentionally inaccessible. Keep the server in this sandbox.
+        CODEX_ARGS=(--dangerously-bypass-approvals-and-sandbox)
+        _no_daemon=0
+        for _arg in "$@"; do
+            [[ "$_arg" != "--" ]] || break
+            if [[ "$_arg" == "--no-daemon" ]]; then _no_daemon=1; break; fi
+        done
+        [[ "$_no_daemon" == "1" ]] || CODEX_ARGS+=(--no-daemon)
         env -i "${ENV_ARGS[@]}" sandbox-exec -p "$PROFILE" \
-            "$_agent_real" --dangerously-bypass-approvals-and-sandbox "$@"
+            "$_agent_real" "${CODEX_ARGS[@]}" "$@"
         ;;
 esac
