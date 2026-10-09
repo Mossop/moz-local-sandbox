@@ -317,6 +317,11 @@ args=(
     --setenv SHELL   "${SHELL:-/bin/bash}"
     --setenv TERM    "${TERM:-xterm-256color}"
     --setenv LANG    "${LANG:-C.UTF-8}"
+
+    # This stops bash from thinking it is being invoked by ssh and so attempting
+    # to load ~/.bashrc.
+    --setenv SHLVL   "${SHLVL:-1}"
+
     --setenv PATH    "$_SANDBOX_PATH"
 
     # Point npm/pip/go at sandbox-only caches. cargo and uv use their default

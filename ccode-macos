@@ -497,6 +497,11 @@ ENV_ARGS=(
     SHELL="${SHELL:-/bin/zsh}"
     TERM="${TERM:-xterm-256color}"
     LANG="${LANG:-en_US.UTF-8}"
+
+    # This stops bash from thinking it is being invoked by ssh and so attempting
+    # to load ~/.bashrc.
+    SHLVL="${SHLVL:-1}"
+
     # Sandbox-installed cargo bin first, then host cargo bin (read-only,
     # provides the rustup-managed `cargo`/`rustc` shims), then the rest.
     PATH="$_SANDBOX_PATH"
