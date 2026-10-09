@@ -437,10 +437,11 @@ SBPROFILE
 # does not get Claude's state or the macOS keychain, and Claude does not get
 # CODEX_HOME. Optional shared ~/.agents skills are deliberately not exposed.
 if [[ "$MODE" == "claude" ]]; then
+    CLAUDE_CONFIG="$(realpath "${CLAUDE_CONFIG_DIR:-$HOME/.claude}")"
     PROFILE+=$'\n'"(allow file-read* (subpath $(sb_quote "$HOME/.local/share/claude")) (subpath $(sb_quote "$HOME/.config/claude")))"
     # ~/.claude.json is saved via sibling .lock/.tmp.* files and a rename;
     # without them every save of it fails.
-    PROFILE+=$'\n'"(allow file-read* file-write* (subpath $(sb_quote "$HOME/.claude")) (literal $(sb_quote "$HOME/.claude.json")) (prefix $(sb_quote "$HOME/.claude.json.")))"
+    PROFILE+=$'\n'"(allow file-read* file-write* (subpath $(sb_quote "$CLAUDE_CONFIG")) (literal $(sb_quote "$HOME/.claude.json")) (prefix $(sb_quote "$HOME/.claude.json.")))"
     PROFILE+=$'\n'"(allow file-read* file-write* (subpath $(sb_quote "$HOME/Library/Keychains")) (subpath \"/Library/Keychains\") (subpath \"/private/var/db/SystemKey\") (subpath \"/private/var/db/mds\"))"
 elif [[ "$MODE" == "codex" ]]; then
     CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
@@ -551,6 +552,7 @@ ENV_ARGS=(
     MOZ_DISABLE_UTILITY_SANDBOX="1"
 )
 [[ "$MODE" == "codex" ]] && ENV_ARGS+=(CODEX_HOME="$CODEX_HOME")
+[[ "$MODE" == "claude" && -n "$CLAUDE_CONFIG_DIR" ]] && ENV_ARGS+=(CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR")
 
 # Note: we used to forward Claude Code's OAuth token via
 # CLAUDE_CODE_OAUTH_TOKEN, extracted from the host keychain with
