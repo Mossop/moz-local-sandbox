@@ -341,6 +341,11 @@ args=(
     --setenv GIT_CONFIG_VALUE_0 "$SBX/empty-hooks"
 )
 
+if [[ -n "${SSH_CONNECTION:-}" ]]; then
+    # Allow an agent inside the sandbox to detect if it's being run over SSH.
+    args+=(--setenv SSH_CONNECTION "$SSH_CONNECTION")
+fi
+
 # Add only the selected agent's executable and state.
 if [[ "$MODE" == "claude" ]]; then
     args+=(

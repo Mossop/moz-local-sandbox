@@ -550,6 +550,11 @@ ENV_ARGS=(
     MOZ_DISABLE_SOCKET_PROCESS_SANDBOX="1"
     MOZ_DISABLE_UTILITY_SANDBOX="1"
 )
+if [[ -n "${SSH_CONNECTION:-}" ]]; then
+    # Allow an agent inside the sandbox to detect if it's being run over SSH.
+    ENV_ARGS+=(SSH_CONNECTION="$SSH_CONNECTION")
+fi
+
 [[ "$MODE" == "codex" ]] && ENV_ARGS+=(CODEX_HOME="$CODEX_HOME")
 
 # Note: we used to forward Claude Code's OAuth token via
