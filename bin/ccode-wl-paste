@@ -1,0 +1,31 @@
+#!/bin/bash
+# ccode-wl-paste — wl-paste shim for the ccode sandbox.
+# Forwards to the host-side open server, which only hands out image
+# contents: enough for pasting screenshots into claude. Text is pasted by
+# the terminal (Ctrl+Shift+V) and never needs to cross the sandbox.
+CCODE_CLIPBOARD_TOKEN="${CCODE_CLIPBOARD_TOKEN:-$(cat /opt/ccode-clipboard-token 2>/dev/null)}"
+if [[ -z "${CCODE_OPEN_PORT:-}" || -z "$CCODE_CLIPBOARD_TOKEN" ]]; then
+    echo "wl-paste: clipboard broker not running" >&2
+    exit 1
+fi
+# The header comes from a file so the token stays out of /proc/*/cmdline.
+_get() {
+    exec curl -sf -H @<(printf "X-Clipboard-Token: %s" "$CCODE_CLIPBOARD_TOKEN") "$@"
+}
+_url="http://127.0.0.1:${CCODE_OPEN_PORT}"
+_type=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -l|--list-types) _get "$_url/paste-types" ;;
+        -t|--type)       _type="${2:-}"; shift ;;
+        --type=*)        _type="${1#--type=}" ;;
+        -n|--no-newline) ;;
+        *) echo "wl-paste: unsupported in sandbox: $1" >&2; exit 1 ;;
+    esac
+    shift
+done
+if [[ "$_type" != image/* ]]; then
+    echo "wl-paste: only image types are available in the sandbox" >&2
+    exit 1
+fi
+_get -G --data-urlencode "type=$_type" "$_url/paste"

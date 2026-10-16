@@ -1,0 +1,28 @@
+#!/bin/bash
+# ccode-wl-copy — wl-copy shim for the ccode sandbox.
+# Sends text from stdin (or the arguments) to the host-side open server,
+# which puts it on the host clipboard with the real wl-copy.
+CCODE_CLIPBOARD_TOKEN="${CCODE_CLIPBOARD_TOKEN:-$(cat /opt/ccode-clipboard-token 2>/dev/null)}"
+if [[ -z "${CCODE_OPEN_PORT:-}" || -z "$CCODE_CLIPBOARD_TOKEN" ]]; then
+    echo "wl-copy: clipboard broker not running" >&2
+    exit 1
+fi
+_primary=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -p|--primary) _primary=1 ;;
+        --) shift; break ;;
+        -*) echo "wl-copy: unsupported in sandbox: $1" >&2; exit 1 ;;
+        *) break ;;
+    esac
+    shift
+done
+_post() {
+    curl -sf -H @<(printf "X-Clipboard-Token: %s" "$CCODE_CLIPBOARD_TOKEN") -H "Expect:" --data-binary @- \
+        "http://127.0.0.1:${CCODE_OPEN_PORT}/copy?primary=$_primary" >/dev/null
+}
+if [[ $# -gt 0 ]]; then
+    printf '%s' "$*" | _post
+else
+    _post
+fi

@@ -65,6 +65,15 @@ opens it for real. Allowed: `bugzilla.mozilla.org`, `phabricator.services.mozill
 of the client. This does not guarantee desktop isolation: Linux shares the
 host network namespace, and macOS exposes LaunchServices (see Residual risks).
 
+### Clipboard (Linux, Wayland)
+
+The Wayland socket is not mounted. Instead, `wl-paste`/`wl-copy` are shadowed
+by shims that go through the same host-side server (it needs `wl-clipboard`
+installed on the host). The sandbox can paste images (screenshots into claude)
+and write text (`/copy`), but cannot read text from the clipboard, which may
+hold passwords; paste text with the terminal (Ctrl+Shift+V) instead. Requests
+carry a per-session token so other local processes cannot use the broker.
+
 ## Host setup
 
 ### Linux

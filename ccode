@@ -108,16 +108,25 @@ cleanup() {
         kill "$_OPEN_PID" 2>/dev/null || true
         wait "$_OPEN_PID" 2>/dev/null || true
     fi
-    rm -f "$RUNTIME_DIR/open-server-status" "$RUNTIME_DIR/open-server.log"
+    rm -f "$RUNTIME_DIR/open-server-status" "$RUNTIME_DIR/open-server.log" "$RUNTIME_DIR/clipboard-token"
     rmdir "$RUNTIME_DIR"
 }
 trap cleanup EXIT
 OPEN_PORT=""
 _OPEN_SERVER="$REPO_DIR/bin/ccode-open-server"
+# The open server also brokers the Wayland clipboard (image paste, /copy) for
+# the wl-paste/wl-copy shims. The token keeps other local processes out. It
+# reaches the sandbox as a file: a --setenv would put it on bwrap's command
+# line, which other users can read in /proc.
+CLIPBOARD_TOKEN=""
+if [[ -n "${WAYLAND_DISPLAY:-}" ]] && command -v wl-paste >/dev/null && command -v wl-copy >/dev/null; then
+    CLIPBOARD_TOKEN="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+    (umask 077 && printf '%s' "$CLIPBOARD_TOKEN" > "$RUNTIME_DIR/clipboard-token")
+fi
 if [[ -f "$_OPEN_SERVER" ]]; then
     _OPEN_STATUS="$RUNTIME_DIR/open-server-status"
     _OPEN_LOG="$RUNTIME_DIR/open-server.log"
-    python3 -I "$_OPEN_SERVER" > "$_OPEN_STATUS" 2>"$_OPEN_LOG" &
+    CCODE_CLIPBOARD_TOKEN="$CLIPBOARD_TOKEN" python3 -I "$_OPEN_SERVER" > "$_OPEN_STATUS" 2>"$_OPEN_LOG" &
     _OPEN_PID=$!
     for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
         if [[ -s "$_OPEN_STATUS" ]]; then break; fi
@@ -435,6 +444,16 @@ if [[ -n "$OPEN_PORT" ]]; then
         --ro-bind "$REPO_DIR/bin/ccode-open" /opt/ccode-bin/xdg-open
         --setenv  CCODE_OPEN_PORT             "$OPEN_PORT"
     )
+    if [[ -n "$CLIPBOARD_TOKEN" ]]; then
+        # Claude Code only uses wl-copy when WAYLAND_DISPLAY is set. The
+        # socket itself is not mounted: the shims are the only way out.
+        args+=(
+            --ro-bind "$REPO_DIR/bin/ccode-wl-paste" /opt/ccode-bin/wl-paste
+            --ro-bind "$REPO_DIR/bin/ccode-wl-copy"  /opt/ccode-bin/wl-copy
+            --ro-bind "$RUNTIME_DIR/clipboard-token" /opt/ccode-clipboard-token
+            --setenv  WAYLAND_DISPLAY                "$WAYLAND_DISPLAY"
+        )
+    fi
 fi
 
 args+=(
