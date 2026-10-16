@@ -95,7 +95,7 @@ _rw_roots=(); _seen=(); _rw_bind_args=()
 for _root in "${RW_ROOTS[@]}"; do
     _root="$(realpath -m "$_root")"; [[ -e "$_root" ]] || { echo "mozsb: warning: rw path does not exist, skipping: $_root" >&2; continue; }
     [[ "$_root" == / || "$(realpath "$HOME")" == "$_root" || "$(realpath "$HOME")" == "$_root"/* ]] && { echo "mozsb: refusing to expose HOME or an ancestor" >&2; exit 1; }
-    _dup=false; for _old in "${_seen[@]}"; do [[ "$_old" == "$_root" ]] && _dup=true; done
+    _dup=false; for _old in ${_seen[@]+"${_seen[@]}"}; do [[ "$_old" == "$_root" ]] && _dup=true; done
     [[ "$_dup" == true ]] && continue
     _seen+=("$_root"); _rw_roots+=("$_root"); _rw_bind_args+=(--bind "$_root" "$_root")
 done
@@ -405,7 +405,9 @@ fi
 
 # Add only the selected agent's executable and state.
 if [[ "$MODE" == "claude" ]]; then
-    CLAUDE_CONFIG="$(realpath -m "${CLAUDE_CONFIG_DIR:-$HOME/.claude}")"
+    CLAUDE_CONFIG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    mkdir -p "$CLAUDE_CONFIG"
+    CLAUDE_CONFIG="$(realpath -m "$CLAUDE_CONFIG")"
     args+=(
         --ro-bind-try "$HOME/.local/share/claude" "$HOME/.local/share/claude"
         --ro-bind-try "$HOME/.config/claude"      "$HOME/.config/claude"

@@ -109,7 +109,7 @@ for _root in "${RW_ROOTS[@]}"; do
     if [[ ! -e "$_root" ]]; then echo "mozsb: warning: rw path does not exist, skipping: $_root" >&2; continue; fi
     _root="$(python3 -I -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$_root")"
     [[ "$_root" == / || "$(realpath "$HOME")" == "$_root" || "$(realpath "$HOME")" == "$_root"/* ]] && { echo "mozsb: refusing to expose HOME or an ancestor" >&2; exit 1; }
-    _dup=false; for _old in "${_seen[@]}"; do [[ "$_old" == "$_root" ]] && _dup=true; done
+    _dup=false; for _old in ${_seen[@]+"${_seen[@]}"}; do [[ "$_old" == "$_root" ]] && _dup=true; done
     [[ "$_dup" == true ]] && continue
     _seen+=("$_root"); _rw_roots+=("$_root")
 done
@@ -479,7 +479,9 @@ SBPROFILE
 # does not get Claude's state or the macOS keychain, and Claude does not get
 # CODEX_HOME. Optional shared ~/.agents skills are deliberately not exposed.
 if [[ "$MODE" == "claude" ]]; then
-    CLAUDE_CONFIG="$(realpath "${CLAUDE_CONFIG_DIR:-$HOME/.claude}")"
+    CLAUDE_CONFIG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    mkdir -p "$CLAUDE_CONFIG"
+    CLAUDE_CONFIG="$(realpath "$CLAUDE_CONFIG")"
     PROFILE+=$'\n'"(allow file-read* (subpath $(sb_quote "$HOME/.local/share/claude")) (subpath $(sb_quote "$HOME/.config/claude")))"
     # ~/.claude.json is saved via sibling .lock/.tmp.* files and a rename;
     # without them every save of it fails.
@@ -604,7 +606,7 @@ if [[ -n "${SSH_CONNECTION:-}" ]]; then
 fi
 
 [[ "$MODE" == "codex" ]] && ENV_ARGS+=(CODEX_HOME="$CODEX_HOME")
-[[ "$MODE" == "claude" && -n "$CLAUDE_CONFIG_DIR" ]] && ENV_ARGS+=(CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR")
+[[ "$MODE" == "claude" && -n "${CLAUDE_CONFIG_DIR:-}" ]] && ENV_ARGS+=(CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR")
 
 # Note: we used to forward Claude Code's OAuth token via
 # CLAUDE_CODE_OAUTH_TOKEN, extracted from the host keychain with
