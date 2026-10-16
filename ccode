@@ -357,10 +357,11 @@ fi
 
 # Add only the selected agent's executable and state.
 if [[ "$MODE" == "claude" ]]; then
+    CLAUDE_CONFIG="$(realpath -m "${CLAUDE_CONFIG_DIR:-$HOME/.claude}")"
     args+=(
         --ro-bind-try "$HOME/.local/share/claude" "$HOME/.local/share/claude"
         --ro-bind-try "$HOME/.config/claude"      "$HOME/.config/claude"
-        --bind-try    "$HOME/.claude"             "$HOME/.claude"
+        --bind-try    "$CLAUDE_CONFIG"            "$CLAUDE_CONFIG"
         --bind-try    "$HOME/.claude.json"        "$HOME/.claude.json"
     )
 elif [[ "$MODE" == "codex" ]]; then
@@ -370,6 +371,7 @@ elif [[ "$MODE" == "codex" ]]; then
     CODEX_HOME="$(realpath -m "$CODEX_HOME")"
     args+=(--bind "$CODEX_HOME" "$CODEX_HOME" --setenv CODEX_HOME "$CODEX_HOME")
 fi
+[[ "$MODE" == "claude" && -n "${CLAUDE_CONFIG_DIR:-}" ]] && args+=(--setenv CLAUDE_CONFIG_DIR "$CLAUDE_CONFIG_DIR")
 
 if [[ -n "$AGENT_BIN" ]]; then
     args+=(--ro-bind "$_agent_real" "$_agent_real")
