@@ -45,6 +45,7 @@ checkout elsewhere. The home directory and its ancestors cannot be selected.
 ### Env vars
 
 - `MOZSB_SRC=/path` - use a different root than `~/src`.
+- `MOZSB_SRC=/path:/other/path` - expose multiple source roots read-write.
 - `MOZSB_CWD_ONLY=1` - expose only `$PWD` rw instead of all of `~/src`.
 - `MOZSB_EXTRA_BIN_DIR=/path` - mount a host bin dir read-only, prepended to `PATH`.
 - `MOZSB_NOEXEC=1` (macOS) - strip the exec bit from any file that gained it
@@ -57,6 +58,25 @@ checkout elsewhere. The home directory and its ancestors cannot be selected.
   of `~/.config/mozsb/env`.
 
 The former `CCODE_*` environment variable names remain accepted as aliases.
+
+For persistent per-checkout source access, put a config file at
+`~/.config/mozsb` (or `$XDG_CONFIG_HOME/mozsb`). Repeat `SRC` to expose
+multiple roots; a section applies to launches from that directory or below it,
+and the most specific matching section wins:
+
+```ini
+SRC = ~/src
+
+[~/firefox]
+SRC = ~/firefox
+SRC = ~/depot_tools
+
+[~/work/client]
+CWD_ONLY = 1
+```
+
+`MOZSB_SRC` overrides configured roots, and `MOZSB_CWD_ONLY` overrides the
+configured `CWD_ONLY` value. A configured cwd-only section exposes the cwd.
 
 The sandbox starts from an empty environment, so host `export`s never reach it.
 To set variables for every session, write `~/.config/mozsb/env`:
