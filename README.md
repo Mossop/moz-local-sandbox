@@ -12,7 +12,7 @@ Firefox checkout.
 
 If you have your source code in `~/src` and you're ok with sharing all this in
 the sandbox and forwarding an SSH agent, you can proceed to the next step.
-Otherwise, check the section `Env vars` below to change the default policy.
+Otherwise, see [Configuration](#configuration) below to change the defaults.
 
 ### Then
 
@@ -39,10 +39,73 @@ and symlinks the OS-appropriate installed copy as `mozsb`. Re-run it after
 updates. The launcher refuses to run when its own directory is inside the
 writable source root: sandbox-controlled files must not execute on the host.
 
-Run from within `MOZSB_SRC`, or explicitly select `MOZSB_CWD_ONLY=1` for a
-checkout elsewhere. The home directory and its ancestors cannot be selected.
+Run from within one of the configured source roots, or select
+`MOZSB_CWD_ONLY=1` for a checkout elsewhere. The home directory and its
+ancestors cannot be selected as writable source roots.
 
-### Env vars
+### Configuration
+
+Use this directory layout:
+
+```text
+~/.config/mozsb/
+├── config   # launcher settings: source roots, read-only access, options
+└── env      # variables passed to programs inside the sandbox (optional)
+```
+
+Both files are optional. If `$XDG_CONFIG_HOME` is set, use
+`$XDG_CONFIG_HOME/mozsb/` instead. If you already have a **file** named
+`~/.config/mozsb`, follow [Migrating an old config](#migrating-an-old-config)
+before creating the directory.
+
+Create the directory with `mkdir -p ~/.config/mozsb`, then save your launcher
+settings in `~/.config/mozsb/config`. For example:
+
+```ini
+SRC = ~/src
+EXTRA_RO_DIRS = ~/reference docs
+EXTRA_RO_DIRS = /data/reference
+EXTRA_BIN_DIR = ~/.local/tools/bin
+NO_SSH_AGENT = 1
+
+[~/firefox]
+SRC = ~/firefox
+SRC = ~/depot_tools
+
+[~/work/client]
+CWD_ONLY = 1
+```
+
+| Config key | Effect |
+| --- | --- |
+| `SRC` | Expose a source root read-write; repeat for multiple roots. Default: `~/src`. |
+| `CWD_ONLY` | Expose only the current directory read-write when set to `1`. |
+| `EXTRA_RO_DIRS` | Expose a directory read-only, without adding it to `PATH`; repeat for multiple directories. |
+| `EXTRA_BIN_DIR` | Expose a directory read-only and prepend it to `PATH`. |
+| `NO_SSH_AGENT` | Disable SSH agent forwarding when set to `1`. |
+| `NOEXEC` | On macOS, remove newly gained execute bits on exit when set to `1`; see the details below. |
+| `CLAUDE_BIN`, `CODEX_BIN` | Set the path to the agent executable. |
+| `ENV_FILE` | Read sandbox environment variables from a different file. |
+
+Use `1` to enable flags and `0` to disable them. Extra read-only and bin
+directories must already exist. The config file uses INI-style syntax. Paths
+can contain spaces and start with `~/`; values are literal, without shell
+expansion. Double quotes around values are optional.
+Lines starting with `#` and trailing `#` comments are accepted.
+
+Settings above the first section are global defaults. A section such as
+`[~/firefox]` applies when launching from that directory or any directory
+below it. Only the most specific matching section applies. Its settings
+override global values for the same key; its `SRC` and `EXTRA_RO_DIRS` lists
+replace the corresponding global lists.
+
+Environment overrides take priority over config settings. For example,
+`MOZSB_EXTRA_RO_DIRS=/tmp/reference mozsb claude` replaces the configured
+read-only directory list for that launch. `MOZSB_SRC` replaces configured
+source roots and bypasses configured `CWD_ONLY`; use `MOZSB_CWD_ONLY=1` to
+explicitly select only the current directory.
+
+### Environment overrides
 
 - `MOZSB_SRC=/path` - use a different root than `~/src`.
 - `MOZSB_SRC=/path:/other/path` - expose multiple source roots read-write.
@@ -61,27 +124,12 @@ checkout elsewhere. The home directory and its ancestors cannot be selected.
 
 The former `CCODE_*` environment variable names remain accepted as aliases.
 
-For persistent per-checkout source access, put a config file at
-`~/.config/mozsb` (or `$XDG_CONFIG_HOME/mozsb`). Repeat `SRC` to expose
-multiple roots; a section applies to launches from that directory or below it,
-and the most specific matching section wins:
+### Sandbox environment
 
-```ini
-SRC = ~/src
-
-[~/firefox]
-SRC = ~/firefox
-SRC = ~/depot_tools
-
-[~/work/client]
-CWD_ONLY = 1
-```
-
-`MOZSB_SRC` overrides configured roots, and `MOZSB_CWD_ONLY` overrides the
-configured `CWD_ONLY` value. A configured cwd-only section exposes the cwd.
-
-The sandbox starts from an empty environment, so host `export`s never reach it.
-To set variables for every session, write `~/.config/mozsb/env`:
+The launcher forwards only selected host environment variables (listed under
+[What's exposed](#whats-exposed)). To pass additional variables to programs
+inside the sandbox, write `~/.config/mozsb/env`. Launcher settings such as
+`SRC` and `EXTRA_RO_DIRS` belong in `config`; agent variables belong in `env`:
 
 ```sh
 # one KEY=value per line; `export ` prefix, blank lines and # comments are fine
@@ -97,6 +145,21 @@ into the sandbox, since that is where the agent then keeps its settings and
 credentials. The env file itself is never exposed to the sandbox, so keys in
 it are reachable only as environment variables — the same exposure as
 `GH_TOKEN` (see Residual risks).
+
+### Migrating an old config
+
+`~/.config/mozsb/` is a directory containing both `config` and `env`. The old
+files `~/.config/mozsb` and `~/.config/ccode` remain supported as fallbacks,
+in that order, when the new config file is absent. To migrate an old
+`~/.config/mozsb` file:
+
+```sh
+mv ~/.config/mozsb ~/.config/mozsb.old
+mkdir ~/.config/mozsb
+mv ~/.config/mozsb.old ~/.config/mozsb/config
+```
+
+These paths also respect `$XDG_CONFIG_HOME`.
 
 ### Opening URLs in the host browser
 

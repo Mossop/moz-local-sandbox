@@ -1,0 +1,78 @@
+# Shared launcher configuration. Sourced by ccode and ccode-macos, never eval'd.
+CWD="$(pwd -P)"
+_expand_src() {
+    case "$1" in
+        "~") printf '%s' "$HOME" ;;
+        "~/"*) printf '%s/%s' "$HOME" "${1#\~/}" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+_config_base="${XDG_CONFIG_HOME:-$HOME/.config}"
+_config="$_config_base/mozsb/config"
+if [[ ! -f "$_config" ]]; then
+    if [[ -f "$_config_base/mozsb" ]]; then _config="$_config_base/mozsb"
+    else _config="$_config_base/ccode"; fi
+fi
+_cfg_global=(); _cfg_match=(); _global_ro=(); _match_ro=()
+_global_only=""; _match_only=""
+_best=""; _best_len=0
+_trim() {
+    _line="${_line#"${_line%%[![:space:]]*}"}"
+    _line="${_line%"${_line##*[![:space:]]}"}"
+}
+if [[ -f "$_config" ]]; then
+    # Select one section, rather than combining broader checkout policies.
+    while IFS= read -r _line || [[ -n "$_line" ]]; do
+        _line="${_line%%#*}"; _trim
+        [[ "$_line" == \[*\] ]] || continue
+        _section="${_line#\[}"; _section="${_section%\]}"
+        _section="$(_expand_src "$_section")"; _section="${_section%/}"
+        if [[ "$CWD" == "$_section" || "$CWD" == "$_section"/* ]] && (( ${#_section} > _best_len )); then
+            _best="$_section"; _best_len=${#_section}
+        fi
+    done < "$_config"
+    _section=""
+    while IFS= read -r _line || [[ -n "$_line" ]]; do
+        _line="${_line%%#*}"; _trim
+        [[ -n "$_line" ]] || continue
+        if [[ "$_line" == \[*\] ]]; then
+            _section="${_line#\[}"; _section="${_section%\]}"
+            _section="$(_expand_src "$_section")"; _section="${_section%/}"
+            continue
+        fi
+        [[ -z "$_section" || "$_section" == "$_best" ]] || continue
+        if [[ "$_line" != *=* ]]; then
+            echo "mozsb: ignoring malformed config line in $_config: $_line" >&2
+            continue
+        fi
+        _key="${_line%%=*}"; _key="${_key%"${_key##*[![:space:]]}"}"
+        _line="${_line#*=}"; _trim
+        _value="${_line%\"}"; _value="${_value#\"}"
+        _scope=global; [[ -z "$_section" ]] || _scope=match
+        case "$_key" in
+            SRC)
+                _value="$(_expand_src "$_value")"
+                if [[ "$_scope" == global ]]; then _cfg_global+=("$_value")
+                else _cfg_match+=("$_value"); fi ;;
+            EXTRA_RO_DIRS)
+                if [[ "$_scope" == global ]]; then _global_ro+=("$_value")
+                else _match_ro+=("$_value"); fi ;;
+            CWD_ONLY|EXTRA_BIN_DIR|NOEXEC|NO_SSH_AGENT|CLAUDE_BIN|CODEX_BIN|ENV_FILE)
+                printf -v "_${_scope}_${_key}" '%s' "$(_expand_src "$_value")" ;;
+            *) echo "mozsb: ignoring unknown config key in $_config: $_key" >&2 ;;
+        esac
+    done < "$_config"
+fi
+_global_only="${_global_CWD_ONLY:-}"; _match_only="${_match_CWD_ONLY:-}"
+# Only known launcher variables can be assigned. Values remain literal data.
+for _key in EXTRA_BIN_DIR NOEXEC NO_SSH_AGENT CLAUDE_BIN CODEX_BIN ENV_FILE; do
+    _env_key="MOZSB_$_key"; _alias_key="CCODE_$_key"
+    _match_key="_match_$_key"; _global_key="_global_$_key"
+    if [[ -z "${!_env_key+x}" ]]; then
+        printf -v "$_env_key" '%s' "${!_alias_key-${!_match_key-${!_global_key-}}}"
+    fi
+done
+if [[ -z "${MOZSB_EXTRA_RO_DIRS+x}" ]]; then
+    if (( ${#_match_ro[@]} )); then _global_ro=("${_match_ro[@]}"); fi
+    MOZSB_EXTRA_RO_DIRS="${CCODE_EXTRA_RO_DIRS-$(IFS=:; printf '%s' "${_global_ro[*]-}")}"
+fi

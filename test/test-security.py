@@ -56,6 +56,7 @@ class SecurityTests(unittest.TestCase):
     def run_command(self, argv, *, cwd=None, extra=None, input=None):
         env = dict(self.env)
         env.update(extra or {})
+        env = {key: value for key, value in env.items() if value is not None}
         return subprocess.run([str(arg) for arg in argv], cwd=cwd or self.work,
                               env=env, input=input, text=True, capture_output=True, timeout=30)
 
@@ -182,6 +183,99 @@ esac
             self.assertIn("ccode-open: blocked:", result.stderr)
             result = self.run_command([installed, "exec", "/usr/bin/touch", installed])
             self.assert_denied(result)
+
+    def config_settings(self, *, extra=None, cwd=None):
+        return self.run_command(["/bin/bash", "-eu", "-c", '''
+source "$1/bin/ccode-config"
+printf 'SRC=%s\n' "${_cfg_global[@]-}"
+printf 'MATCH_SRC=%s\n' "${_cfg_match[@]-}"
+printf 'RO=%s\nBIN=%s\nSSH=%s\nAGENT=%s\n' "$MOZSB_EXTRA_RO_DIRS" "${MOZSB_EXTRA_BIN_DIR-}" "${MOZSB_NO_SSH_AGENT-}" "${MOZSB_CODEX_BIN-}"
+''', "config-test", REPO], extra=extra, cwd=cwd)
+
+    def test_config_directory_and_precedence(self):
+        config_home = self.home / "custom-config"
+        config = config_home / "mozsb/config"
+        self.write(config, """# global defaults
+SRC = ~/src
+EXTRA_RO_DIRS = ~/reference data
+EXTRA_RO_DIRS = /data/reference
+EXTRA_BIN_DIR = ~/tools/bin
+NO_SSH_AGENT = 0
+CODEX_BIN = /config/codex
+[~/src]
+EXTRA_RO_DIRS = ~/checkout-reference
+NO_SSH_AGENT = 1
+[~/src/nested]
+SRC = ~/src/nested
+EXTRA_RO_DIRS = ~/nested-reference
+""")
+        # New config wins over the legacy fallback. Its directory also holds env.
+        self.write(config_home / "ccode", "EXTRA_RO_DIRS = /legacy\n")
+        self.write(config_home / "mozsb/env", "SANDBOX_SETTING=value\n")
+        extra = {"XDG_CONFIG_HOME": str(config_home)}
+        result = self.config_settings(extra=extra, cwd=self.home)
+        self.assert_ok(result)
+        self.assertIn("RO=~/reference data:/data/reference\n", result.stdout)
+        self.assertIn(f"BIN={self.home}/tools/bin\n", result.stdout)
+        # Environment already sets these in setUp, so it wins over config.
+        self.assertIn("SSH=1\n", result.stdout)
+        self.assertIn(f"AGENT={self.hostbin}/codex\n", result.stdout)
+        result = self.config_settings(extra=extra)
+        self.assert_ok(result)
+        self.assertIn("RO=~/checkout-reference\n", result.stdout)
+        nested = self.work / "nested"
+        nested.mkdir()
+        result = self.config_settings(extra=extra, cwd=nested)
+        self.assert_ok(result)
+        self.assertIn(f"MATCH_SRC={nested}\n", result.stdout)
+        self.assertIn("RO=~/nested-reference\n", result.stdout)
+        result = self.config_settings(extra={**extra, "MOZSB_NO_SSH_AGENT": None,
+                                             "MOZSB_CODEX_BIN": None})
+        self.assert_ok(result)
+        self.assertIn("SSH=1\n", result.stdout)
+        self.assertIn("AGENT=/config/codex\n", result.stdout)
+        result = self.config_settings(extra={**extra, "MOZSB_NO_SSH_AGENT": None}, cwd=self.home)
+        self.assert_ok(result)
+        self.assertIn("SSH=0\n", result.stdout)
+        for override in [{"MOZSB_EXTRA_RO_DIRS": "/override"},
+                         {"CCODE_EXTRA_RO_DIRS": "/override"},
+                         {"MOZSB_EXTRA_RO_DIRS": ""}]:
+            result = self.config_settings(extra={**extra, **override})
+            self.assert_ok(result)
+            self.assertIn("RO=" + next(iter(override.values())) + "\n", result.stdout)
+
+    @unittest.skipUnless(MAC, "requires Seatbelt")
+    def test_config_and_env_files_together(self):
+        config_home = self.home / "settings"
+        reference = self.home / "reference data"
+        self.write(reference / "data", "reference contents\n")
+        self.write(config_home / "mozsb/config", f"""SRC = ~/src
+EXTRA_RO_DIRS = ~/reference data
+CLAUDE_BIN = {self.hostbin}/claude
+NO_SSH_AGENT = 1
+""")
+        self.write(config_home / "mozsb/env", "CONFIG_TEST=value-from-env-file\n")
+        extra = {"XDG_CONFIG_HOME": str(config_home), "MOZSB_SRC": None,
+                 "MOZSB_CLAUDE_BIN": None, "MOZSB_NO_SSH_AGENT": None}
+        result = self.run_command([REPO / "ccode-macos", "claude"], extra=extra)
+        self.assert_ok(result)
+        self.assertIn("CONFIG_TEST=value-from-env-file\n", result.stdout)
+        self.assert_ok(self.launch("/bin/cat", reference / "data", extra=extra))
+        self.assert_denied(self.launch("/usr/bin/touch", reference / "data", extra=extra))
+
+    def test_legacy_config_and_literal_values(self):
+        marker = self.home / "must-not-exist"
+        legacy = self.home / ".config/mozsb"
+        self.write(legacy, f"SRC = ~/src\nEXTRA_RO_DIRS = $(touch {marker})\n")
+        result = self.config_settings()
+        self.assert_ok(result)
+        self.assertIn(f"SRC={self.work}\n", result.stdout)
+        self.assertIn(f"RO=$(touch {marker})\n", result.stdout)
+        self.assertFalse(marker.exists())
+        legacy.rename(legacy.with_name("ccode"))
+        result = self.config_settings()
+        self.assert_ok(result)
+        self.assertIn(f"SRC={self.work}\n", result.stdout)
 
     def test_linux_launcher(self):
         self.assert_ok(self.run_command(["/bin/bash", REPO / "test/test-linux-launcher.sh"]))
@@ -334,7 +428,7 @@ printf 'ARG=%s\\n' "$@"
         server.listen(5)
         connect = "import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1])"
         self.assert_ok(self.launch(sys.executable, "-c", connect, path,
-                                  extra={"SSH_AUTH_SOCK": str(path), "MOZSB_NO_SSH_AGENT": ""}))
+                                  extra={"SSH_AUTH_SOCK": str(path), "MOZSB_NO_SSH_AGENT": "0"}))
         self.assert_denied(self.launch(sys.executable, "-c", connect, path,
                                       extra={"SSH_AUTH_SOCK": str(path)}))
         result = self.launch("/usr/bin/env", extra={"SSH_AUTH_SOCK": str(path)})
