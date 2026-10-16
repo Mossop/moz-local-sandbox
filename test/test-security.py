@@ -9,6 +9,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
+import urllib.request
 
 REPO = Path(__file__).resolve().parents[1]
 MAC = sys.platform == "darwin"
@@ -80,6 +82,56 @@ class SecurityTests(unittest.TestCase):
                     "\nhttps://bugzilla.mozilla.org/", "http://localhost:65536/",
                     "http://localhost:bad/", "http://localhost/\x00", "file:///tmp/a"]:
             self.assertFalse(module.allowed(url), url)
+
+    def test_clipboard_broker(self):
+        # Fake host wl-clipboard: the clipboard offers text and a PNG.
+        self.write(self.hostbin / "wl-paste", """#!/bin/sh
+case "$*" in
+  --list-types) printf 'text/plain\\nimage/png\\n' ;;
+  *image/png) printf PNGDATA ;;
+  *) printf secret-password ;;
+esac
+""", 0o755)
+        copied = self.root / "copied"
+        self.write(self.hostbin / "wl-copy", f"#!/bin/sh\necho \"$*\" >> {copied}\ncat >> {copied}\n", 0o755)
+        env = dict(self.env, CCODE_CLIPBOARD_TOKEN="tok")
+        server = subprocess.Popen([sys.executable, "-I", REPO / "bin/ccode-open-server"], env=env,
+                                  stdout=subprocess.PIPE, text=True)
+        self.addCleanup(server.stdout.close)
+        self.addCleanup(server.wait)
+        self.addCleanup(server.kill)
+        port = server.stdout.readline().strip().removeprefix("OPEN_PORT=")
+        extra = {"CCODE_OPEN_PORT": port, "CCODE_CLIPBOARD_TOKEN": "tok"}
+
+        def shim(name, *args, extra=extra, input=None):
+            return self.run_command([REPO / f"bin/ccode-{name}", *args], extra=extra, input=input)
+
+        self.assertEqual(shim("wl-paste", "-l").stdout, "image/png\n")
+        self.assertEqual(shim("wl-paste", "--type", "image/png").stdout, "PNGDATA")
+        for args in [(), ("--type", "text/plain"), ("--type", "image/png;text/plain")]:
+            self.assertNotIn("secret", shim("wl-paste", *args).stdout, args)
+        self.assertNotEqual(shim("wl-paste", "-l", extra=dict(extra, CCODE_CLIPBOARD_TOKEN="bad")).returncode, 0)
+        self.assert_ok(shim("wl-copy", input="hello"))
+        self.assert_ok(shim("wl-copy", "--primary", input="world"))
+        self.assertEqual(copied.read_text(), "\nhello--primary\nworld")
+
+        # The shims run in the sandbox and can be bypassed: hit the server directly.
+        def status(path, token="tok", data=None, headers={}):
+            request = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=data,
+                                             headers={"X-Clipboard-Token": token, **headers})
+            try:
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    return response.status, response.read()
+            except urllib.error.HTTPError as e:
+                return e.code, e.read()
+        self.assertEqual(status("/paste?type=image/png"), (200, b"PNGDATA"))
+        for path in ["/paste", "/paste?type=text/plain", "/paste?type=image/png%3Btext/plain"]:
+            self.assertEqual(status(path)[0], 403, path)
+        self.assertEqual(status("/paste?type=image/png", token="bad")[0], 403)
+        self.assertEqual(status("/paste?type=image/png", token="\u00e9")[0], 403)
+        self.assertEqual(status("/copy", token="bad", data=b"x")[0], 403)
+        self.assertEqual(status("/copy", data=b"x", headers={"Content-Length": "-1"})[0], 413)
+        self.assertEqual(copied.read_text(), "\nhello--primary\nworld")
 
     def test_npmrc_symlinks(self):
         state = self.home / ".sandbox"

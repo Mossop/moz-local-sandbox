@@ -7,9 +7,17 @@ allowlist, and calls the host URL opener. The in-sandbox wrapper
 (bin/ccode-open) sends requests here via loopback — the only path from
 inside the sandbox to the host desktop.
 
+When CCODE_CLIPBOARD_TOKEN is set, it also brokers the Wayland clipboard
+for the in-sandbox wl-paste/wl-copy shims (bin/ccode-wl-paste,
+bin/ccode-wl-copy): the sandbox can read image contents and write text, but
+cannot read text, which may hold passwords or tokens. Requests must carry
+the token, so other local processes (or web pages) cannot use it.
+
 Prints OPEN_PORT=<n> to stdout when ready.
 """
+import hmac
 import http.server
+import os
 import platform
 import subprocess
 import sys
@@ -18,6 +26,8 @@ import urllib.parse
 
 HTTPS_ONLY = {"bugzilla.mozilla.org", "phabricator.services.mozilla.com"}
 LOOPBACK = {"localhost", "127.0.0.1"}
+CLIPBOARD_TOKEN = os.environ.get("CCODE_CLIPBOARD_TOKEN", "")
+MAX_COPY_BYTES = 16 * 1024 * 1024
 
 
 def allowed(url):
@@ -41,9 +51,46 @@ def allowed(url):
         return False
 
 
+def image_type(mime):
+    return mime.startswith("image/") and all(c.isalnum() or c in "+-." for c in mime[6:])
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
+    def reply(self, code, body=b""):
+        self.send_response(code)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def clipboard_authorized(self):
+        token = self.headers.get("X-Clipboard-Token", "").encode(errors="replace")
+        return bool(CLIPBOARD_TOKEN) and hmac.compare_digest(token, CLIPBOARD_TOKEN.encode())
+
+    def do_POST(self):
+        path, _, query = self.path.partition("?")
+        if path != "/copy" or not self.clipboard_authorized():
+            self.reply(403)
+            return
+        length = self.headers.get("Content-Length", "0")
+        if not length.isdigit() or int(length) > MAX_COPY_BYTES:
+            self.reply(413)
+            return
+        data = self.rfile.read(int(length))
+        argv = ["wl-copy"]
+        if urllib.parse.parse_qs(query).get("primary") == ["1"]:
+            argv.append("--primary")
+        # wl-copy forks a child that keeps serving the selection; it must not
+        # inherit our pipes or the server log.
+        result = subprocess.run(argv, input=data, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, timeout=5)
+        self.reply(200 if result.returncode == 0 else 500)
+
     def do_GET(self):
-        params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        url_path, _, query = self.path.partition("?")
+        params = urllib.parse.parse_qs(query)
+        if url_path in ("/paste-types", "/paste"):
+            self.paste(url_path, params)
+            return
         url = params.get("url", [""])[0]
         if not allowed(url):
             print(f"DENY OPEN {url!r}", file=sys.stderr)
@@ -55,6 +102,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
         subprocess.Popen([opener, url])
         self.send_response(200)
         self.end_headers()
+
+    def paste(self, url_path, params):
+        if not self.clipboard_authorized():
+            self.reply(403)
+            return
+        if url_path == "/paste-types":
+            result = subprocess.run(["wl-paste", "--list-types"], capture_output=True, timeout=5)
+            types = [t for t in result.stdout.decode(errors="replace").splitlines() if image_type(t)]
+            self.reply(200 if types else 404, "".join(t + "\n" for t in types).encode())
+            return
+        mime = params.get("type", [""])[0]
+        if not image_type(mime):
+            self.reply(403)
+            return
+        result = subprocess.run(["wl-paste", "--no-newline", "--type", mime],
+                                capture_output=True, timeout=5)
+        self.reply(200 if result.returncode == 0 else 404,
+                   result.stdout if result.returncode == 0 else b"")
 
     def log_message(self, fmt, *args):
         pass
