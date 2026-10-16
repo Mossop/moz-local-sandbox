@@ -220,6 +220,30 @@ subprocess.run(['/usr/bin/readlink', '/proc/self/ns/pid'], check=True)
                     server.accept()
 
     @unittest.skipUnless(MAC, "requires Seatbelt")
+    def test_extra_read_only_directories(self):
+        reference = self.home / 'reference "data"'
+        nested = self.work / "read-only"
+        for directory in [reference, nested]:
+            self.write(directory / "data", "reference contents\n")
+        link = self.home / "reference-link"
+        link.symlink_to(reference, target_is_directory=True)
+        extra = {"MOZSB_EXTRA_RO_DIRS": "~/reference-link:" + str(nested),
+                 "MOZSB_EXTRA_BIN_DIR": str(self.hostbin)}
+        for directory in [reference, nested]:
+            self.assert_ok(self.launch("/bin/cat", directory / "data", extra=extra))
+            self.assert_denied(self.launch("/usr/bin/touch", directory / "data", extra=extra))
+            self.assert_denied(self.launch("/usr/bin/touch", directory / "new", extra=extra))
+        result = self.launch("/usr/bin/printenv", "PATH", extra=extra)
+        self.assert_ok(result)
+        paths = result.stdout.strip().split(":")
+        self.assertEqual(paths[0], str(self.hostbin))
+        for directory in [reference, link, nested]:
+            self.assertNotIn(str(directory), paths)
+        result = self.launch("/usr/bin/true", extra={"MOZSB_EXTRA_RO_DIRS": str(self.home / "missing")})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not a directory", result.stderr)
+
+    @unittest.skipUnless(MAC, "requires Seatbelt")
     def test_existing_macos_probes(self):
         self.assert_ok(self.run_command(["/bin/bash", REPO / "test/test-macos.sh"]))
 

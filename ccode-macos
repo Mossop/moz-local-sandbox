@@ -73,7 +73,7 @@ CWD="$(pwd -P)"
 _config="${XDG_CONFIG_HOME:-$HOME/.config}/mozsb"
 [[ -f "$_config" ]] || _config="${XDG_CONFIG_HOME:-$HOME/.config}/ccode"
 _cfg_global=(); _cfg_match=(); _global_only=""; _match_only=""
-_expand_src() { case "$1" in "~") printf '%s' "$HOME";; "~/"*) printf '%s/%s' "$HOME" "${1#~/}";; *) printf '%s' "$1";; esac; }
+_expand_src() { case "$1" in "~") printf '%s' "$HOME";; "~/"*) printf '%s/%s' "$HOME" "${1#\~/}";; *) printf '%s' "$1";; esac; }
 _best=""; _best_len=0
 if [[ -f "$_config" ]]; then
     while IFS= read -r _line || [[ -n "$_line" ]]; do
@@ -209,6 +209,16 @@ if [[ -n "$MOZSB_EXTRA_BIN_DIR" ]]; then
     MOZSB_EXTRA_BIN_DIR="${MOZSB_EXTRA_BIN_DIR/#\~/$HOME}"
     [[ -d "$MOZSB_EXTRA_BIN_DIR" ]] || { echo "mozsb: MOZSB_EXTRA_BIN_DIR=$MOZSB_EXTRA_BIN_DIR: not a directory" >&2; exit 1; }
 fi
+# Extra data/reference directories are readable without becoming command paths.
+_ro_dirs=(); _extra_ro_dirs=()
+IFS=: read -r -a _extra_ro_dirs <<< "${MOZSB_EXTRA_RO_DIRS:-${CCODE_EXTRA_RO_DIRS:-}}"
+for _dir in ${_extra_ro_dirs[@]+"${_extra_ro_dirs[@]}"}; do
+    [[ -n "$_dir" ]] || continue
+    _dir="$(_expand_src "$_dir")"
+    [[ -d "$_dir" ]] || { echo "mozsb: MOZSB_EXTRA_RO_DIRS=$_dir: not a directory" >&2; exit 1; }
+    _ro_dirs+=("$(cd "$_dir" && pwd -P)")
+done
+
 # nvm activates a node version by mutating PATH from a shell function the
 # user's rc sources; anything the sandbox execs directly — claude included —
 # never goes through that, and neither does a non-interactive shell. Resolve
@@ -531,6 +541,11 @@ if [[ -n "$MOZSB_EXTRA_BIN_DIR" ]]; then
     PROFILE+=$'\n'"(allow file-read* (subpath $(sb_quote "$MOZSB_EXTRA_BIN_DIR")))"
 fi
 
+
+for _dir in ${_ro_dirs[@]+"${_ro_dirs[@]}"}; do
+    PROFILE+=$'\n'"(allow file-read* (subpath $(sb_quote "$_dir")))"
+    PROFILE+=$'\n'"(deny file-write* (subpath $(sb_quote "$_dir")))"
+done
 
 # Build the env passed into the sandbox. env -i clears the host environment
 # so secrets (AWS_*, OPENAI_API_KEY, etc.) cannot leak in. We re-introduce

@@ -124,6 +124,31 @@ else
 fi
 
 
+mkdir -p "$TMP/reference data" "$TMP/rw/read-only" "$TMP/extra-bin"
+ln -s "$TMP/reference data" "$TMP/reference-link"
+ro_output=$(MOZSB_EXTRA_RO_DIRS="$TMP/reference-link:$TMP/rw/read-only" \
+    MOZSB_EXTRA_BIN_DIR="$TMP/extra-bin" run_launcher exec /usr/bin/true)
+for ro_dir in "$TMP/reference data" "$TMP/rw/read-only"; do
+    ro_dir=$("$HOST_REALPATH" "$ro_dir")
+    binding=$(printf 'ARG=--ro-bind\nARG=%s\nARG=%s' "$ro_dir" "$ro_dir")
+    if [[ "$ro_output" == *"$binding"* ]]; then
+        ok "extra read-only directory is mounted: $ro_dir"
+    else
+        fail "extra read-only directory is mounted: $ro_dir"
+    fi
+done
+sandbox_path=$(awk '/^ARG=PATH$/ { getline; print; exit }' <<<"$ro_output")
+if [[ "$sandbox_path" == "ARG=$TMP/extra-bin:"* && "$sandbox_path" != *"$TMP/reference"* && "$sandbox_path" != *"$TMP/rw/read-only"* ]]; then
+    ok "extra read-only directories stay out of PATH; bin directory stays in PATH"
+else
+    fail "extra read-only directories stay out of PATH; bin directory stays in PATH"
+fi
+if MOZSB_EXTRA_RO_DIRS="$TMP/missing" run_launcher exec /usr/bin/true >/dev/null 2>&1; then
+    fail "missing read-only directory is rejected"
+else
+    ok "missing read-only directory is rejected"
+fi
+
 cat > "$TMP/env" <<EOF
 # comment
 export CLAUDE_CODE_EFFORT_LEVEL=xhigh

@@ -47,6 +47,8 @@ checkout elsewhere. The home directory and its ancestors cannot be selected.
 - `MOZSB_SRC=/path` - use a different root than `~/src`.
 - `MOZSB_SRC=/path:/other/path` - expose multiple source roots read-write.
 - `MOZSB_CWD_ONLY=1` - expose only `$PWD` rw instead of all of `~/src`.
+- `MOZSB_EXTRA_RO_DIRS=/path:/other/path` - expose host directories read-only
+  without adding them to `PATH`. Paths may contain spaces or start with `~/`.
 - `MOZSB_EXTRA_BIN_DIR=/path` - mount a host bin dir read-only, prepended to `PATH`.
 - `MOZSB_NOEXEC=1` (macOS) - strip the exec bit from any file that gained it
   during the session, on exit. Existing execute bits are preserved. This is
